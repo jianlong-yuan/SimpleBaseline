@@ -1,0 +1,8 @@
+thop
+pyyaml
+tabulate
+requests
+tensorboardX
+opencv-python
+tqdm
+imgaug

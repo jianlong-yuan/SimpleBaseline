@@ -89,11 +89,6 @@ class CitySegmentation(SegmentationDataset):
                 assert os.path.isfile(_image), _image
                 self.images.append(_image)
 
-        if cfg.TRAIN.SEMI.USING_AUG_NOISY == 'randaug':
-            logging.info('using random aug')
-            self.aug = Rand_Augment(Numbers=cfg.TRAIN.SEMI.Numbers, Magnitude=cfg.TRAIN.SEMI.Magnitude, max_Magnitude=cfg.TRAIN.SEMI.max_Magnitude, p=cfg.TRAIN.SEMI.Prob)
-
-
         logging.info('{} data num {}'.format(self.split,len(self.images)))
 
     def __getitem__(self, index):
@@ -102,10 +97,6 @@ class CitySegmentation(SegmentationDataset):
             mask = np.zeros([img.shape[0], img.shape[1]])
         else:
             mask = np.array(Image.open(self.masks[index]))
-
-        if 'noisy' in self.masks[index]:
-            if cfg.TRAIN.SEMI.USING_AUG_NOISY == 'randaug':
-                img, mask = self.aug(img, mask)
 
         img, mask = self.transform(img, mask)
         mask = self._set_ignore_lable(mask)

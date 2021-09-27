@@ -1,0 +1,86 @@
+DATASET:
+    NAME: "cityscape"
+    MEAN: [0.5, 0.5, 0.5]
+    STD: [0.5, 0.5, 0.5]
+    MODE: 'testval'
+    SEMI:
+        TRAIN_SPLIT_L: 'train_18unlabel_deeplabv3_1t'
+        TRAIN_SPLIT_U: 'train_18unlabel_deeplabv3_1t'
+        VAL_SPLIT: 'val_fine'
+
+PIPELINES:
+    SEMI:
+        TRAIN_PIPELINES_L: [
+            {"type": BGR2RGB},
+            {"type":RandScale, "scale": [0.5, 2.0]},
+            {"type":RandomHorizontalFlip},
+            {"type":Crop, "crop_type":'rand'},
+            {"type":ToTensor},
+            {"type": Normalize},
+        ]
+        TRAIN_PIPELINES_U: [
+            {"type": Randaug, "Numbers":3, "Magnitude":20, "max_Magnitude":40, "p":1.0},
+            {"type": BGR2RGB},
+            {"type":RandScale, "scale": [0.5, 2.0]},
+            {"type":RandomHorizontalFlip},
+            {"type":Crop, "crop_type":'rand'},
+            {"type":ToTensor},
+            {"type": Normalize},
+        ]
+        VAL_PIPELINES: [
+            {"type": BGR2RGB},
+            {"type": ToTensor},
+            {"type": Normalize},
+        ]
+    TEST_PIPELINES: [
+        {"type": BGR2RGB},
+        {"type": ToTensor},
+        {"type": Normalize}
+    ]
+
+TRAIN:
+    MAX_ITERS: 20000
+    VAL_PRE_ITERS: 500
+    CROP_SIZE: (769, 769)
+    USING_DSBN: True
+    BACKBONE_PRETRAINED_PATH: '/**/tf-xception65-270e81cf.pth'
+    PRETRAINED_MODEL_PATH: "/**/best_model.pth"
+    SEMI:
+        BATCH_SIZE_L: 2
+        BATCH_SIZE_U: 2
+
+TEST:
+    BATCH_SIZE: 1
+    CROP_SIZE: (1025, 2049)
+    SCALES: [1.0]
+    FLIP: False
+    MODE: 'testval'
+    TEST_SPLIT: 'val_fine'
+    SAVE_PREDICTION: True
+    COMPUTE_METRIC: True
+    SAVE_PREDICTION_PATH: ""
+    TEST_MODEL_PATH: ""
+SOLVER:
+    LR: 0.002
+    DECODER_LR_FACTOR: 10.0
+    WEIGHT_DECAY: 0.0
+    AUX: False
+    AUX_WEIGHT: 0.5
+    REGULAR_MINE:
+        REGULAR_PRETRAINED_PATH: "/**/best_model.pth"
+        WIGHT_DECAT: 1e-4
+    LOSS_NAME: 'DynamicCEAndSCELoss'
+    CEAndSCELoss:
+        ALPHA: 1.0
+        BATE: 1.0
+
+MODEL:
+    MODEL_NAME: "DeepLabV3_Plus"
+    BACKBONE: "xception65"
+    BN_EPS_FOR_ENCODER: 1e-3
+    OUTPUT_STRIDE: 16
+    BN_IS_TRAINING_FOR_ENCODER: True
+    BN_IS_TRAINING_FOR_DECODER: True
+
+VISUAL:
+    OUTPUT_DIR: 'runs/semi_deeplabv3'

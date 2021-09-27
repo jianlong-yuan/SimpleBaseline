@@ -360,6 +360,142 @@ class DiceLoss(nn.Module):
         return dict(loss=self._aux_forward(*inputs))
 
 
+class L2SP(nn.Module):
+    def __init__(self, model):
+        super(L2SP, self).__init__()
+        assert cfg.SOLVER.WEIGHT_DECAY == 0
+        self.pretrained_weights=torch.load(cfg.SOLVER.REGULAR_MINE.REGULAR_PRETRAINED_PATH, map_location=lambda storage, loc: storage)
+        self.weight_decay = cfg.SOLVER.REGULAR_MINE.WIGHT_DECAT
+        keys_all = list([k for k, v in model.named_parameters() if v.requires_grad])
+        keys = list([k for k, v in model.named_parameters() if v.requires_grad])
+        tmp_keys = list(model.state_dict().keys())
+        for k, v in model.state_dict().items():
+            # if 'encoder' not in k:
+            #     keys.remove(k)
+            if 'weight' in k:
+                k1 = k.replace('weight', 'running_mean')
+                if k1 in tmp_keys and k in keys:
+                    keys.remove(k)
+            elif 'bias' in k:
+                if k in keys:
+                    keys.remove(k)
+
+        self.l2sp = keys
+        self.l2 = list(set(keys_all) - set(keys))
+
+        self.regular_dict = {}
+        pretrained_keys = self.pretrained_weights.keys()
+        for i, key in enumerate(self.l2sp):
+            if 'conv2d_list.3' in key or 'conv2d_list.2' in key:
+                logging.info(key)
+                continue
+            if key.replace('module.', '') in pretrained_keys:
+                self.regular_dict[key] = self.pretrained_weights[key.replace('module.', '')]
+            elif key.replace('encoder.', '').replace('module.', '') in pretrained_keys:
+                self.regular_dict[key] = self.pretrained_weights[key.replace('encoder.', '').replace('module.', '')]
+            else:
+                ValueError('error key {}'.format(key))
+
+        for i, key in enumerate(self.l2):
+            if 'conv2d_list.3' in key or 'conv2d_list.2' in key:
+                logging.info(key)
+                continue
+            self.regular_dict[key] = torch.tensor(0.0)
+
+        logging.info('warning using l2sp l2: {} l2sp: {} reg all {} keys all {}'.format(len(self.l2), len(self.l2sp), len(self.regular_dict.keys()), len(keys_all)))
+
+    def forward(self, model):
+        keys = self.regular_dict.keys()
+        tmp_keys = {}
+        for k, v in model.named_parameters():
+            if v.requires_grad:
+                tmp_keys[k] = v
+        outputs = [self.func((k, tmp_keys[k])) for k in keys]
+        return sum(outputs) * self.weight_decay
+
+    def func(self, inputs):
+        k, w = inputs
+        w0 = self.regular_dict[k]
+        out= torch.pow(w - w0.to(w.device), 2).sum()
+        return out
+
+
+class DynamicCEAndSCELoss(torch.nn.Module):
+    def __init__(self, aux=True, aux_weight=0.2, ignore_index=-1):
+        super(DynamicCEAndSCELoss, self).__init__()
+        self.alpha = cfg.SOLVER.CEAndSCELoss.ALPHA
+        self.beta = cfg.SOLVER.CEAndSCELoss.BATE
+        self.using_weight = cfg.SOLVER.CEAndSCELoss.USING_WEIGHT
+        self.cross_entropy = nn.CrossEntropyLoss(reduction='none')
+        self.ignore_index = ignore_index
+        self.nclass = datasets[cfg.DATASET.NAME].NUM_CLASS
+        self.cross_entropy_clean = nn.CrossEntropyLoss(reduction='mean', ignore_index=ignore_index)
+
+
+    def _forward(self, pred, labels):
+        if self.using_weight:
+            weights = torch.max(torch.softmax(pred, dim=1), dim=1, keepdim=True).values
+            weights[weights>0.8] = 1.0
+            weights = torch.clamp(weights, min=1e-10, max=1.0).detach()
+        else:
+            weights = 0.5
+
+        # CCE
+        not_ignore_mask = labels.ne(self.ignore_index).float()
+        # print(pred.shape, labels.shape)
+        ce = self.cross_entropy(pred, labels)
+        ce = torch.mean(ce * not_ignore_mask * (1-weights))
+        # RCE
+        pred = F.softmax(pred, dim=1)
+        label_one_hot = F.one_hot(torch.clamp(labels, min=0, max=self.nclass - 1), self.nclass).float()
+        label_one_hot = torch.clamp(label_one_hot, min=1e-4, max=1.0)
+        label_one_hot = label_one_hot.permute([0, 3, 1, 2]).contiguous()
+
+        rce = -1 * pred * torch.log(label_one_hot)
+
+        rce = torch.sum(rce, dim=1)
+        rce = torch.mean(rce * not_ignore_mask * weights)
+
+        # logging.info((self.alpha * ce, self.beta * rce))
+        # Loss
+        loss = self.alpha * ce + self.beta * rce
+        return loss
+
+    def _tuple_inputs(self, preds, target):
+        return sum([self._forward(preds[i], target) for i in range(len(preds))])
+
+    def _tuple_inputs_clean(self, preds, target):
+        return sum([self.cross_entropy_clean(preds[i], target) for i in range(len(preds))])
+
+    def forward(self, *inputs, **kwargs):
+
+        p, t, noisy_inds = inputs
+        p = p[0]
+        ps_noisy = []
+        ps_clean = []
+        t_noisy = []
+        t_clean = []
+        for nid, is_noisy in enumerate(noisy_inds):
+            if is_noisy:
+                ps_noisy.append(p[nid, :, :, :])
+                t_noisy.append(t[nid, :, :])
+            else:
+                ps_clean.append(p[nid, :, :, :])
+                t_clean.append(t[nid, :, :])
+
+        loss_noisy, loss_clean = 0.0, 0.0
+        if len(ps_noisy):
+            preds_noisy = torch.stack(ps_noisy, dim=0)
+            target_noisy = torch.stack(t_noisy, dim=0)
+            loss_noisy = self._tuple_inputs(preds=tuple([preds_noisy]), target=target_noisy)
+        if len(ps_clean):
+            preds_clean = torch.stack(ps_clean, dim=0)
+            target_clean = torch.stack(t_clean, dim=0)
+            loss_clean = self._tuple_inputs_clean(preds=tuple([preds_clean]), target=target_clean)
+        loss = loss_noisy + loss_clean
+        # logging.info('loss noisy {:.4f} loss clean {:.4f}'.format(loss_noisy, loss_clean))
+        # preds, target = tuple(inputs)
+        return dict(loss=loss)
 def get_segmentation_loss(model, use_ohem=False, **kwargs):
     if use_ohem:
         return MixSoftmaxCrossEntropyOHEMLoss(**kwargs)
@@ -372,6 +508,10 @@ def get_segmentation_loss(model, use_ohem=False, **kwargs):
     elif cfg.SOLVER.LOSS_NAME == 'dice':
         logging.info('Use dice loss!')
         return DiceLoss(**kwargs)
+
+    elif cfg.SOLVER.LOSS_NAME == 'DynamicCEAndSCELoss':
+        logging.info('Use DynamicCEAndSCELoss')
+        return DynamicCEAndSCELoss(**kwargs)
     model = model.lower()
     if model == 'icnet':
         return ICNetLoss(**kwargs)

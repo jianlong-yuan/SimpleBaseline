@@ -351,13 +351,11 @@ class Pad(object):
         return image, label
 
 
-
-
-
 @PIPELINES_REGISTRY.register()
 class Randaug(Rand_Augment):
-    def __init__(self, image_size = (1024, 1024), target_size = (1024,1024), Numbers=3, Magnitude=7, max_Magnitude=10, transforms=None, p=1.0):
-        super(Randaug, self).__init__(image_size=image_size, target_size=target_size, Numbers=Numbers,
-                                      Magnitude=Magnitude, max_Magnitude=max_Magnitude, transforms=transforms, p=p)
+    def __init__(self,  Numbers=3, Magnitude=7, max_Magnitude=10, transforms=None, p=1.0):
+        super(Randaug, self).__init__(Numbers=Numbers, Magnitude=Magnitude,
+                                      max_Magnitude=max_Magnitude, transforms=transforms,
+                                      p=p)
 
 
